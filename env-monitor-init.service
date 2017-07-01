@@ -1,0 +1,15 @@
+[Unit]
+Description=Initialize environment sensors.
+After=network.target
+
+[Service]
+Type=oneshot
+User=env-monitor
+WorkingDirectory=/var/env-monitor/
+ExecStart=/var/env-monitor/sense.py --init
+ExecReload=/var/env-monitor/sense.py --init
+StandardOutput=journal
+
+[Install]
+WantedBy=multi-user.target
+

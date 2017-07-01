@@ -1,0 +1,14 @@
+[Unit]
+Description=Take environmental measurements.
+After=env-monitor-init.service
+
+[Service]
+Type=oneshot
+User=env-monitor
+WorkingDirectory=/var/env-monitor
+ExecStart=/var/env-monitor/sense.py
+StandardOutput=journal
+
+[Install]
+WantedBy=multi-user.target
+
