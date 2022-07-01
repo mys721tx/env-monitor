@@ -1,2 +1,2 @@
 RTIMULib==7.2.1
-sense-hat==2.2.0
+sense-hat==2.3.1
