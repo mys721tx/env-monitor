@@ -1,2 +1,0 @@
-RTIMULib==7.2.1
-sense-hat==2.6.0
