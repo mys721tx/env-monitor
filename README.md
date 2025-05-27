@@ -1,4 +1,5 @@
 # env-monitor
+[![GPLv3 license](https://img.shields.io/badge/License-GPLv3-blue.svg)](http://www.gnu.org/licenses/gpl-3.0.html)
 
 ## Description
 
@@ -18,4 +19,4 @@ the result at boot time .
 
 ## License
 
-[GNU General Public License, version 2](http://www.gnu.org/licenses/gpl-2.0.html)
+[GNU General Public License, version 3](http://www.gnu.org/licenses/gpl-3.0.html)
