@@ -32,7 +32,29 @@ struct Args {
     output: Option<String>,
 }
 
+async fn wait_lps25h_ready(dev: &mut LinuxI2CDevice) -> Result<(), LinuxI2CError> {
+    loop {
+        let status = dev.smbus_read_byte_data(0x27)?;
+        if (status & 0x03) == 0x03 {
+            return Ok(());
+        }
+        async_sleep(AsyncDuration::from_millis(5)).await;
+    }
+}
+
+async fn wait_hts221_ready(dev: &mut LinuxI2CDevice) -> Result<(), LinuxI2CError> {
+    loop {
+        let status = dev.smbus_read_byte_data(0x27)?;
+        if (status & 0x03) == 0x03 {
+            return Ok(());
+        }
+        async_sleep(AsyncDuration::from_millis(5)).await;
+    }
+}
+
 async fn read_lps25h(mut dev: LinuxI2CDevice) -> Result<(i32, i32), LinuxI2CError> {
+    dev.smbus_write_byte_data(0x21, 0x01)?;
+    wait_lps25h_ready(&mut dev).await?;
     // Read raw data
     let mut data = [0u8; 5];
     dev.write(&[0x28 | 0x80])?;
@@ -48,6 +70,8 @@ async fn read_lps25h(mut dev: LinuxI2CDevice) -> Result<(i32, i32), LinuxI2CErro
 }
 
 async fn read_hts221(mut dev: LinuxI2CDevice) -> Result<(i32, i32), LinuxI2CError> {
+    dev.smbus_write_byte_data(0x21, 0x01)?;
+    wait_hts221_ready(&mut dev).await?;
     // Read calibration data
     let mut calib = [0u8; 16];
     dev.write(&[0x30 | 0x80])?;
@@ -100,15 +124,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Power on both sensors
     lps25h.smbus_write_byte_data(0x20, 0x80)?;
     hts221.smbus_write_byte_data(0x20, 0x80)?;
-    async_sleep(AsyncDuration::from_millis(50)).await;
 
     if args.init {
-        // Only initialize sensors (power on, short delay), then exit
+        // Only initialize sensors (power on), then exit
         return Ok(());
     }
 
-    let lps25h_task = task::spawn_blocking(move || executor::block_on(read_lps25h(lps25h)));
-    let hts221_task = task::spawn_blocking(move || executor::block_on(read_hts221(hts221)));
+    let lps25h_task = task::spawn_blocking(move || {
+        executor::block_on(async {
+            let mut dev = lps25h;
+            dev.smbus_write_byte_data(0x21, 0x01)?;
+            wait_lps25h_ready(&mut dev).await?;
+            read_lps25h(dev).await
+        })
+    });
+    let hts221_task = task::spawn_blocking(move || {
+        executor::block_on(async {
+            let mut dev = hts221;
+            dev.smbus_write_byte_data(0x21, 0x01)?;
+            wait_hts221_ready(&mut dev).await?;
+            read_hts221(dev).await
+        })
+    });
     let (pressure, temp_press) = lps25h_task.await??;
     let (humidity, temp_hum) = hts221_task.await??;
     let timestamp = Utc::now().timestamp();
