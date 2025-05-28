@@ -3,12 +3,14 @@
 
 use chrono::Utc;
 use clap::Parser;
+use futures::executor;
 use i2cdev::core::*;
 use i2cdev::linux::{LinuxI2CDevice, LinuxI2CError};
 use std::fs::OpenOptions;
 use std::io::{Write, stdout};
-use std::thread::sleep;
-use std::time::Duration;
+use std::time::Duration as AsyncDuration;
+use tokio::task;
+use tokio::time::sleep as async_sleep;
 
 #[derive(Parser)]
 #[command(about = "write sensor value to file")]
@@ -30,15 +32,12 @@ struct Args {
     output: Option<String>,
 }
 
-fn read_lps25h(dev: &mut LinuxI2CDevice) -> Result<(i32, i32), LinuxI2CError> {
-    let mut data = [0u8; 5];
-    // Power on.
-    dev.smbus_write_byte_data(0x20, 0x80)?;
-    sleep(Duration::from_millis(50));
-
+async fn read_lps25h(mut dev: LinuxI2CDevice) -> Result<(i32, i32), LinuxI2CError> {
     // Read raw data
+    let mut data = [0u8; 5];
     dev.write(&[0x28 | 0x80])?;
     dev.read(&mut data[..5])?;
+
     let press_raw = ((data[2] as u32) << 16 | (data[1] as u32) << 8 | (data[0] as u32)) as i32;
     let temp_raw = (((data[4] as u16) << 8) | (data[3] as u16)) as i16;
 
@@ -48,13 +47,9 @@ fn read_lps25h(dev: &mut LinuxI2CDevice) -> Result<(i32, i32), LinuxI2CError> {
     Ok((pressure, temperature))
 }
 
-fn read_hts221(dev: &mut LinuxI2CDevice) -> Result<(i32, i32), LinuxI2CError> {
-    let mut calib = [0u8; 16];
-    // Power on.
-    dev.smbus_write_byte_data(0x20, 0x80)?;
-    sleep(Duration::from_millis(50));
-
+async fn read_hts221(mut dev: LinuxI2CDevice) -> Result<(i32, i32), LinuxI2CError> {
     // Read calibration data
+    let mut calib = [0u8; 16];
     dev.write(&[0x30 | 0x80])?;
     dev.read(&mut calib)?;
 
@@ -96,32 +91,43 @@ fn read_hts221(dev: &mut LinuxI2CDevice) -> Result<(i32, i32), LinuxI2CError> {
     Ok((hum, temp))
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
     let mut lps25h = LinuxI2CDevice::new(&args.i2c_bus, args.lps25h_addr)?;
     let mut hts221 = LinuxI2CDevice::new(&args.i2c_bus, args.hts221_addr)?;
 
-    let (pressure, temp_press) = read_lps25h(&mut lps25h)?;
-    let (humidity, temp_hum) = read_hts221(&mut hts221)?;
+    // Power on both sensors
+    lps25h.smbus_write_byte_data(0x20, 0x80)?;
+    hts221.smbus_write_byte_data(0x20, 0x80)?;
+    async_sleep(AsyncDuration::from_millis(50)).await;
+
+    if args.init {
+        // Only initialize sensors (power on, short delay), then exit
+        return Ok(());
+    }
+
+    let lps25h_task = task::spawn_blocking(move || executor::block_on(read_lps25h(lps25h)));
+    let hts221_task = task::spawn_blocking(move || executor::block_on(read_hts221(hts221)));
+    let (pressure, temp_press) = lps25h_task.await??;
+    let (humidity, temp_hum) = hts221_task.await??;
     let timestamp = Utc::now().timestamp();
 
-    if !args.init {
-        let output_line = format!(
-            "{}\t{:.2}\t{:.2}\t{:.2}\t{:.2}",
-            timestamp, pressure, temp_press, humidity, temp_hum
-        );
-        match &args.output {
-            Some(filename) => {
-                let mut file = OpenOptions::new()
-                    .append(true)
-                    .create(true)
-                    .open(filename)?;
-                writeln!(file, "{}", output_line)?;
-            }
-            None => {
-                let mut out = stdout();
-                writeln!(out, "{}", output_line)?;
-            }
+    let output_line = format!(
+        "{}\t{:.2}\t{:.2}\t{:.2}\t{:.2}",
+        timestamp, pressure, temp_press, humidity, temp_hum
+    );
+    match &args.output {
+        Some(filename) => {
+            let mut file = OpenOptions::new()
+                .append(true)
+                .create(true)
+                .open(filename)?;
+            writeln!(file, "{}", output_line)?;
+        }
+        None => {
+            let mut out = stdout();
+            writeln!(out, "{}", output_line)?;
         }
     }
     Ok(())
